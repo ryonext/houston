@@ -37,29 +37,35 @@ module Houston
 
       notifications.flatten!
 
-      Connection.open(@gateway_uri, @certificate, @passphrase) do |connection|
+
+      connection = Huston::Connection.new(@gateway_uri, @certificate, @passphrase)
+
+      notifications.each_with_index do |notification, index|
+        next unless notification.kind_of?(Notification)
+        next if notification.sent?
+        next unless notification.valid?
+
+        notification.id = index
+
+        if connection.closed?
+          connection.open
+        end
+
+        connection.write(notification.message)
+        notification.mark_as_sent!
+
         ssl = connection.ssl
-
-        notifications.each_with_index do |notification, index|
-          next unless notification.kind_of?(Notification)
-          next if notification.sent?
-          next unless notification.valid?
-
-          notification.id = index
-
-          connection.write(notification.message)
-          notification.mark_as_sent!
-
-          read_socket, write_socket = IO.select([ssl], [], [ssl], timeout)
-          if (read_socket && read_socket[0])
-            if error = connection.read(6)
-              command, status, index = error.unpack("ccN")
-              notification.apns_error_code = status
-              notification.mark_as_unsent!
-            end
+        read_socket, write_socket = IO.select([ssl], [], [ssl], timeout)
+        if (read_socket && read_socket[0])
+          if error = connection.read(6)
+            command, status, index = error.unpack("ccN")
+            notification.apns_error_code = status
+            notification.mark_as_unsent!
+            connection.close
           end
         end
       end
+      connection.close if connection.open?
     end
 
     def unregistered_devices
